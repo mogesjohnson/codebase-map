@@ -1,0 +1,19 @@
+{
+  "name": "codebase-map",
+  "version": "0.1.0",
+  "description": "Static CLI that writes docs/CODEBASE_MAP.md: module tree, exports, dependency graph, risky files and agent context files.",
+  "type": "module",
+  "bin": { "codebase-map": "dist/cli.js" },
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/cli.js"
+  },
+  "engines": { "node": ">=20" },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  }
+}
