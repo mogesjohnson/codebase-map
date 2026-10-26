@@ -1,0 +1,147 @@
+/** Optional Ollama client for --llm: one short AI summary per module via the local /api/generate API. */
+import { Module } from "./analyze.js";
+import { CODE_EXT, readText } from "./scan.js";
+
+export interface OllamaOptions {
+  url: string;
+  model: string;
+  /** Per-request timeout in milliseconds, enforced with AbortController. */
+  timeoutMs: number;
+  /** At most this many modules are summarized; the rest keep only their static purpose. */
+  maxModules: number;
+  /** Hard cap on the characters in one prompt. */
+  maxPromptChars: number;
+  /** Injected for tests; defaults to the global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+export const OLLAMA_DEFAULTS = {
+  url: "http://localhost:11434",
+  model: "llama3.2",
+  timeoutMs: 60_000,
+  maxModules: 30,
+  maxPromptChars: 6_000,
+} as const;
+
+export type OllamaErrorKind = "unreachable" | "timeout" | "model" | "http" | "bad-response";
+
+export class OllamaError extends Error {
+  constructor(public kind: OllamaErrorKind, message: string) { super(message); this.name = "OllamaError"; }
+}
+
+/** Errors that will fail for every module, so the whole AI pass is skipped after the first one. */
+const FATAL: OllamaErrorKind[] = ["unreachable", "timeout", "model"];
+
+/** --ollama-url wins, then OLLAMA_HOST, then the default. A bare host:port gets http://. */
+export function resolveOllamaUrl(flag?: string, env: NodeJS.ProcessEnv = process.env): string {
+  let u = (flag || env.OLLAMA_HOST || OLLAMA_DEFAULTS.url).trim();
+  if (!/^https?:\/\//i.test(u)) u = "http://" + u;
+  return u.replace(/\/+$/, "");
+}
+
+/** POST one prompt to <url>/api/generate with stream:false and return the response text. */
+export async function generate(prompt: string, opts: OllamaOptions): Promise<string> {
+  const doFetch = opts.fetchImpl ?? fetch;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+  let res: Response;
+  try {
+    res = await doFetch(`${opts.url}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: opts.model, prompt, stream: false, options: { temperature: 0.2 } }),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (ctrl.signal.aborted) throw new OllamaError("timeout", `Ollama did not answer within ${opts.timeoutMs} ms at ${opts.url}`);
+    throw new OllamaError("unreachable", `cannot reach Ollama at ${opts.url} (${(e as Error).message})`);
+  }
+  try {
+    const raw = await res.text();
+    if (res.status === 404) throw new OllamaError("model", `model "${opts.model}" not found at ${opts.url}; run \`ollama pull ${opts.model}\``);
+    if (!res.ok) throw new OllamaError("http", `Ollama returned HTTP ${res.status}: ${raw.slice(0, 200)}`);
+    let data: { response?: unknown; error?: unknown };
+    try { data = JSON.parse(raw); } catch { throw new OllamaError("bad-response", "Ollama returned invalid JSON"); }
+    if (typeof data.error === "string") throw new OllamaError("http", `Ollama error: ${data.error}`);
+    if (typeof data.response !== "string" || !data.response.trim()) throw new OllamaError("bad-response", "Ollama returned an empty response");
+    return data.response;
+  } catch (e) {
+    if (e instanceof OllamaError) throw e;
+    if (ctrl.signal.aborted) throw new OllamaError("timeout", `Ollama did not answer within ${opts.timeoutMs} ms at ${opts.url}`);
+    throw new OllamaError("bad-response", `could not read Ollama response (${(e as Error).message})`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const label = (m: string) => (m === "." ? "(root)" : m);
+
+/** Package (non-relative) import specifiers in a file, for prompt context. */
+function packageImports(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/(?:from\s*|require\(\s*|import\s*\(?\s*)['"]([^'".][^'"]*)['"]/g)) out.add(m[1]);
+  return [...out];
+}
+
+/** A short prompt: module path, static purpose, exports, imports and capped file snippets. */
+export function buildPrompt(root: string, mod: Module, maxChars: number): string {
+  const code = mod.files.filter((f) => CODE_EXT.test(f));
+  const pkgs = new Set<string>();
+  for (const f of code.slice(0, 20)) for (const p of packageImports(readText(root, f))) pkgs.add(p);
+  const head = [
+    "You are documenting a codebase for a new contributor.",
+    `In one or two plain sentences (at most 50 words, no markdown, no preamble), say what the module \`${label(mod.name)}\` does.`,
+    "",
+    `Module path: ${label(mod.name)}`,
+    `Static purpose: ${mod.purpose}`,
+    `Exports: ${mod.exports.slice(0, 30).join(", ") || "none detected"}`,
+    `Imports from modules: ${[...mod.deps].sort().map(label).join(", ") || "none"}`,
+    `Imports from packages: ${[...pkgs].slice(0, 20).join(", ") || "none"}`,
+    `Files (${mod.files.length}): ${mod.files.slice(0, 25).join(", ")}${mod.files.length > 25 ? ", ..." : ""}`,
+    "",
+    "Snippets:",
+  ].join("\n");
+  let out = head.slice(0, maxChars);
+  const perFile = 1_200;
+  for (const f of [...code, ...mod.files.filter((x) => /readme/i.test(x))].slice(0, 6)) {
+    const snippet = `\n--- ${f} ---\n${readText(root, f).slice(0, perFile)}\n`;
+    if (out.length + snippet.length > maxChars) { out += snippet.slice(0, Math.max(0, maxChars - out.length)); break; }
+    out += snippet;
+  }
+  return out.slice(0, maxChars);
+}
+
+/** One line, no markdown table breakers, at most 400 characters. */
+export function cleanSummary(s: string): string {
+  const one = s.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/\s+/g, " ").trim();
+  return one.length > 400 ? one.slice(0, 397).trimEnd() + "..." : one;
+}
+
+export interface SummaryResult {
+  summaries: Map<string, string>;
+  /** Set when the whole AI pass was skipped (Ollama unreachable, timeout, missing model). */
+  warning?: string;
+  /** Modules skipped by a per-module failure, with the reason. */
+  failed: { module: string; reason: string }[];
+  /** Modules over the --llm-max-modules cap. */
+  capped: string[];
+}
+
+/** Summarize modules in order, one request at a time. Never throws. */
+export async function summarizeModules(root: string, modules: Module[], opts: OllamaOptions): Promise<SummaryResult> {
+  const result: SummaryResult = { summaries: new Map(), failed: [], capped: modules.slice(opts.maxModules).map((m) => m.name) };
+  for (const mod of modules.slice(0, opts.maxModules)) {
+    try {
+      const text = cleanSummary(await generate(buildPrompt(root, mod, opts.maxPromptChars), opts));
+      if (text) result.summaries.set(mod.name, text);
+    } catch (e) {
+      const err = e instanceof OllamaError ? e : new OllamaError("bad-response", String(e));
+      if (FATAL.includes(err.kind)) {
+        return { summaries: new Map(), failed: [], capped: result.capped, warning: `${err.message}. Skipping AI summaries; writing the static map.` };
+      }
+      result.failed.push({ module: mod.name, reason: err.message });
+    }
+  }
+  return result;
+}
