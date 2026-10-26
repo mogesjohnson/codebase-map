@@ -11,7 +11,10 @@ everything between them is regenerated on each run.
 
 `;
 
-/** Replace the region between markers, keeping everything outside. Creates the file if missing. */
+/**
+ * Replace the region from the first start marker to the last end marker after it, keeping
+ * everything outside. Creates the file if missing.
+ */
 export function mergeIntoFile(path: string, body: string): "created" | "updated" | "appended" {
   const block = `${START}\n${body.trim()}\n${END}`;
   if (!existsSync(path)) {
@@ -20,7 +23,9 @@ export function mergeIntoFile(path: string, body: string): "created" | "updated"
     return "created";
   }
   const old = readFileSync(path, "utf8");
-  const s = old.indexOf(START), e = old.indexOf(END, s + START.length);
+  // The LAST end marker after the first start marker: a stray end marker inside the block
+  // (for example from an older run) must not leave stale generated text behind.
+  const s = old.indexOf(START), e = s >= 0 ? old.lastIndexOf(END) : -1;
   if (s >= 0 && e > s) {
     writeFileSync(path, old.slice(0, s) + block + old.slice(e + END.length));
     return "updated";
