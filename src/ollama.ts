@@ -23,20 +23,54 @@ export const OLLAMA_DEFAULTS = {
   maxPromptChars: 6_000,
 } as const;
 
-export type OllamaErrorKind = "unreachable" | "timeout" | "model" | "http" | "bad-response";
+export type OllamaErrorKind = "unreachable" | "timeout" | "model" | "not-ollama" | "http" | "bad-response";
 
 export class OllamaError extends Error {
   constructor(public kind: OllamaErrorKind, message: string) { super(message); this.name = "OllamaError"; }
 }
 
 /** Errors that will fail for every module, so the whole AI pass is skipped after the first one. */
-const FATAL: OllamaErrorKind[] = ["unreachable", "timeout", "model"];
+const FATAL: OllamaErrorKind[] = ["unreachable", "timeout", "model", "not-ollama"];
 
-/** --ollama-url wins, then OLLAMA_HOST, then the default. A bare host:port gets http://. */
+/**
+ * --ollama-url wins, then OLLAMA_HOST, then the default. Like Ollama's own client, a value without a
+ * scheme gets http:// and a value without a port gets 11434. Unlike Ollama (which uses 80 there),
+ * http:// without a port also gets 11434, since Ollama practically never listens on 80; https://
+ * without a port keeps 443. An explicit port is always kept.
+ */
 export function resolveOllamaUrl(flag?: string, env: NodeJS.ProcessEnv = process.env): string {
-  let u = (flag || env.OLLAMA_HOST || OLLAMA_DEFAULTS.url).trim();
-  if (!/^https?:\/\//i.test(u)) u = "http://" + u;
-  return u.replace(/\/+$/, "");
+  let raw = flag?.trim() || env.OLLAMA_HOST?.trim() || OLLAMA_DEFAULTS.url;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = "http://" + raw;
+  let u: URL;
+  try { u = new URL(raw); } catch { return raw.replace(/\/+$/, ""); }
+  // URL drops a default port (":80"), so read the explicit port from the text itself.
+  const explicit = raw.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?(?:\[[^\]]*\]|[^/:?#]*)(:\d+)/i)?.[1] ?? "";
+  const port = explicit || (u.protocol === "http:" ? ":11434" : "");
+  return `${u.protocol}//${u.hostname}${port}${u.pathname.replace(/\/+$/, "")}`;
+}
+
+/** GET <url>/api/version once; true when the answer looks like Ollama's ({"version": "..."}). */
+async function looksLikeOllama(opts: OllamaOptions): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(opts.timeoutMs, 5_000));
+  try {
+    const res = await (opts.fetchImpl ?? fetch)(`${opts.url}/api/version`, { signal: ctrl.signal });
+    const data = JSON.parse(await res.text());
+    return res.ok && typeof data?.version === "string";
+  } catch { return false; } finally { clearTimeout(timer); }
+}
+
+/** Tell a missing model apart from a wrong URL or a server that is not Ollama. */
+async function diagnose404(raw: string, opts: OllamaOptions): Promise<OllamaError> {
+  let msg = "";
+  try { const e = JSON.parse(raw)?.error; if (typeof e === "string") msg = e; } catch { /* not JSON */ }
+  if (msg && (/model\b.*not found/i.test(msg) || msg.includes(opts.model))) {
+    return new OllamaError("model", `model "${opts.model}" not found at ${opts.url}; run \`ollama pull ${opts.model}\``);
+  }
+  if (await looksLikeOllama(opts)) {
+    return new OllamaError("http", `Ollama at ${opts.url} answered 404 for /api/generate: ${(msg || raw).slice(0, 200)}`);
+  }
+  return new OllamaError("not-ollama", `no Ollama API at ${opts.url} (POST /api/generate returned 404 and /api/version did not answer like Ollama); check --ollama-url or OLLAMA_HOST`);
 }
 
 /** POST one prompt to <url>/api/generate with stream:false and return the response text. */
@@ -59,7 +93,7 @@ export async function generate(prompt: string, opts: OllamaOptions): Promise<str
   }
   try {
     const raw = await res.text();
-    if (res.status === 404) throw new OllamaError("model", `model "${opts.model}" not found at ${opts.url}; run \`ollama pull ${opts.model}\``);
+    if (res.status === 404) throw await diagnose404(raw, opts);
     if (!res.ok) throw new OllamaError("http", `Ollama returned HTTP ${res.status}: ${raw.slice(0, 200)}`);
     let data: { response?: unknown; error?: unknown };
     try { data = JSON.parse(raw); } catch { throw new OllamaError("bad-response", "Ollama returned invalid JSON"); }
