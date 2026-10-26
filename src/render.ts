@@ -13,6 +13,7 @@ export interface RenderInput {
 }
 
 const id = (m: string) => "m_" + (m === "." ? "root" : m.replace(/[^A-Za-z0-9_]/g, "_"));
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\n/g, " ");
 
 /** Root first, then by name. Shared by the renderer and the --llm pass. */
@@ -23,12 +24,15 @@ export function sortModules(a: Analysis): Module[] {
 export function render(inp: RenderInput): string {
   const mods = sortModules(inp.analysis);
   const o: string[] = [];
-  o.push(`_Static map of **${inp.repoName}**: ${mods.length} modules, ${inp.fileCount} files._`, "");
+  const counts = `${plural(mods.length, "module")}, ${plural(inp.fileCount, "file")}`;
+  o.push(inp.ai && inp.ai.summaries.size
+    ? `_Map of **${inp.repoName}**: ${counts}. Static analysis plus AI summaries from Ollama \`${inp.ai.model}\`._`
+    : `_Static map of **${inp.repoName}**: ${counts}._`, "");
 
   o.push("## Module tree", "", "```text", `${inp.repoName}/`);
   mods.forEach((m, i) => {
     const branch = i === mods.length - 1 ? "└── " : "├── ";
-    o.push(`${branch}${m.name === "." ? "(root files)" : m.name + "/"}  (${m.files.length} files)`);
+    o.push(`${branch}${m.name === "." ? "(root files)" : m.name + "/"}  (${plural(m.files.length, "file")})`);
   });
   o.push("```", "", "| Module | Purpose |", "| --- | --- |");
   for (const m of mods) o.push(`| \`${m.name === "." ? "(root)" : m.name}\` | ${cell(m.purpose)} |`);

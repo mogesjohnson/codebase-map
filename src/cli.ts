@@ -83,9 +83,9 @@ export async function main(argv: string[]): Promise<number> {
     const r = await summarizeModules(root, sortModules(analysis), { ...OLLAMA_DEFAULTS, url, model, timeoutMs, maxModules });
     if (r.warning) console.error(`codebase-map: warning: ${r.warning}`);
     else {
-      if (r.failed.length) console.error(`codebase-map: warning: no AI summary for ${r.failed.length} module(s): ${r.failed.map((f) => `${f.module} (${f.reason})`).join("; ")}`);
+      if (r.failed.length || r.stopped) console.error(`codebase-map: warning: no AI summary for ${r.failed.length} module(s): ${r.failed.map((f) => `${f.module} (${f.reason})`).join("; ")}${r.stopped ? `; ${r.stopped}` : ""}`);
       if (r.capped.length) log(`codebase-map: --llm-max-modules ${maxModules} reached; ${r.capped.length} module(s) keep only the static purpose.`);
-      log(`codebase-map: ${r.summaries.size} AI summaries.`);
+      log(`codebase-map: ${r.summaries.size} AI ${r.summaries.size === 1 ? "summary" : "summaries"}.`);
       if (r.summaries.size) ai = { model, summaries: r.summaries };
     }
   }
@@ -102,7 +102,7 @@ export async function main(argv: string[]): Promise<number> {
   if (p.flags.has("--stdout")) { console.log(body); return 0; }
   const out = join(root, "docs", "CODEBASE_MAP.md");
   const how = mergeIntoFile(out, body);
-  console.log(`codebase-map: ${how} ${out} (${analysis.modules.size} modules, ${files.length} files)`);
+  console.log(`codebase-map: ${how} ${out} (${analysis.modules.size} module${analysis.modules.size === 1 ? "" : "s"}, ${files.length} file${files.length === 1 ? "" : "s"})`);
   return 0;
 }
 

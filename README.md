@@ -14,7 +14,8 @@ clearly labeled AI summary of each module.
 3. **Module dependency diagram** (mermaid `graph LR`) from relative `import`/`require`,
    resolved to modules (top-level folders, or any directory with its own `package.json`).
 4. **Risky files**, top 15, scored from git churn (`git log --name-only`), size in lines and fan-in.
-   Without git, churn is skipped and the score uses size and fan-in only.
+   Without git, churn is skipped and the score uses size and fan-in only. In a shallow clone
+   (`git clone --depth 1`) every file has churn 1, so clone with full history for a useful ranking.
 5. **Agent and context files**: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.cursor/rules/**`,
    `.github/copilot-instructions.md`, `.windsurfrules`, `HOWTOTALKTOCLAUDE.md`, `.claude/`, `.codex/` and more.
 
@@ -50,10 +51,10 @@ Nothing else in the target repo is written. The CLI prints one line saying wheth
 
 | Flag | Default | What it does |
 | --- | --- | --- |
-| `--stdout` | off | Print the generated block to stdout instead of writing the file. |
+| `--stdout` | off | Print the generated block to stdout instead of writing the file. With `--llm`, progress lines and warnings go to stderr, so stdout holds only the map. |
 | `--llm` | off | Add an "AI summary" per module from a local Ollama. |
 | `--llm-model <name>` | `llama3.2` | Ollama model to use. |
-| `--ollama-url <url>` | `$OLLAMA_HOST`, else `http://localhost:11434` | Ollama base URL. `host:port` without a scheme gets `http://`. |
+| `--ollama-url <url>` | `$OLLAMA_HOST`, else `http://localhost:11434` | Ollama base URL. Without a scheme it gets `http://`; without a port it gets `11434`. |
 | `--llm-timeout <ms>` | `60000` | Timeout for each request. |
 | `--llm-max-modules <n>` | `30` | Summarize at most `n` modules (root first, then by name); the rest keep only the static purpose. |
 | `--help` | | Print usage. |
@@ -67,6 +68,9 @@ a missing repo directory exits with code 1.
 2. Pull a model: `ollama pull llama3.2` (or any model, then pass `--llm-model <name>`).
 3. Make sure it is running (`ollama serve`, or the desktop app). It listens on `http://localhost:11434`.
    For another host or port, set `OLLAMA_HOST` (for example `OLLAMA_HOST=127.0.0.1:11500`) or pass `--ollama-url`.
+   A value without a port uses 11434: `OLLAMA_HOST=127.0.0.1`, `OLLAMA_HOST=0.0.0.0` and `http://myhost`
+   all mean port 11434 (`0.0.0.0` is used as given, as Ollama's own client does). An explicit port is kept,
+   and `https://` without a port uses 443.
 4. Run `node dist/cli.js ../my-repo --llm`.
 
 For each module, codebase-map sends one prompt to `POST <url>/api/generate` with `stream: false`, using
@@ -76,10 +80,14 @@ module owns" section as ``- AI summary (AI-generated, Ollama `<model>`): ...``, 
 the summaries come from a local LLM and may be wrong. The static purpose table is unchanged.
 Nothing leaves your machine unless `--ollama-url` points elsewhere.
 
-**Without Ollama:** if Ollama is not reachable, a request times out, or the model is not pulled (HTTP 404),
-codebase-map prints one warning to stderr, skips all AI summaries, writes the full static map and exits 0.
-If a single module fails for another reason (for example HTTP 500), only that module is skipped and a
-warning lists it. Without `--llm`, no network request is made and the output is purely static.
+**Without Ollama:** if Ollama is not reachable, a request times out, the model is not pulled (HTTP 404
+with Ollama's "model not found" error), or the URL is not an Ollama server (HTTP 404 and no answer from
+`/api/version`), codebase-map prints one warning to stderr, skips all AI summaries, writes the full static
+map and exits 0. If a single module fails for another reason (for example HTTP 500, or a reply that is
+empty after removing `<think>` blocks), only that module is skipped and one warning lists it. After 3 failed
+requests in a row it stops asking and says so in the same warning; summaries already received are kept.
+Replies are flattened to one line, cut at a word boundary (400 characters), and `<`/`>` are escaped so a
+reply can never write HTML comments or the codebase-map markers into the file. Without `--llm`, no network request is made and the output is purely static.
 
 ### Regeneration in place
 
