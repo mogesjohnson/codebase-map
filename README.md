@@ -1,7 +1,9 @@
 # codebase-map
 
 `codebase-map` writes `docs/CODEBASE_MAP.md`, a living onboarding and architecture page for a repo.
-It uses static analysis only (no LLM, no network) and has zero runtime dependencies.
+By default it uses static analysis only (no LLM, no network) and has zero runtime dependencies.
+With the optional `--llm` flag it also asks a local [Ollama](https://ollama.com) model for a short,
+clearly labeled AI summary of each module.
 
 ## What the page contains
 
@@ -18,17 +20,66 @@ It uses static analysis only (no LLM, no network) and has zero runtime dependenc
 
 Ignored: `node_modules`, `.git`, `dist`, `build`, `out`, `vendor`, `coverage`, `.next`, `target` and similar.
 
+## Setup
+
+Prerequisites: Node.js 20 or newer (`node --version`), npm and git. Ollama is optional.
+
+```sh
+git clone https://github.com/mogesjohnson/codebase-map.git
+cd codebase-map
+npm install          # dev dependencies only: typescript, @types/node
+npm run build        # compiles src/ to dist/
+npm test             # builds, then runs the node:test suite (mocked Ollama, no network)
+```
+
 ## Usage
 
 ```sh
-npm install
-npm run build
-node dist/cli.js [repo-path]       # default: current directory
-node dist/cli.js ../my-repo --stdout   # print instead of writing
-node dist/cli.js ../my-repo --llm      # stub: says Ollama summaries are not implemented, runs static
+node dist/cli.js [repo-path] [options]   # repo-path defaults to the current directory
+node dist/cli.js ../my-repo              # writes ../my-repo/docs/CODEBASE_MAP.md
+node dist/cli.js ../my-repo --stdout     # print the generated block, write nothing
+node dist/cli.js ../my-repo --llm        # add AI summaries from a local Ollama
+node dist/cli.js --help
 ```
 
-Or link it: `npm link` then `codebase-map [repo-path]`.
+Or link it: `npm link`, then `codebase-map [repo-path] [options]`.
+
+Output goes to `<repo-path>/docs/CODEBASE_MAP.md` (the `docs/` folder is created if needed).
+Nothing else in the target repo is written. The CLI prints one line saying whether the file was
+`created`, `updated` or `appended`.
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--stdout` | off | Print the generated block to stdout instead of writing the file. |
+| `--llm` | off | Add an "AI summary" per module from a local Ollama. |
+| `--llm-model <name>` | `llama3.2` | Ollama model to use. |
+| `--ollama-url <url>` | `$OLLAMA_HOST`, else `http://localhost:11434` | Ollama base URL. `host:port` without a scheme gets `http://`. |
+| `--llm-timeout <ms>` | `60000` | Timeout for each request. |
+| `--llm-max-modules <n>` | `30` | Summarize at most `n` modules (root first, then by name); the rest keep only the static purpose. |
+| `--help` | | Print usage. |
+
+Value flags accept `--flag value` or `--flag=value`. Unknown flags or bad values exit with code 2;
+a missing repo directory exits with code 1.
+
+### Optional: AI summaries with Ollama
+
+1. Install Ollama yourself from [ollama.com](https://ollama.com) (codebase-map never downloads it).
+2. Pull a model: `ollama pull llama3.2` (or any model, then pass `--llm-model <name>`).
+3. Make sure it is running (`ollama serve`, or the desktop app). It listens on `http://localhost:11434`.
+   For another host or port, set `OLLAMA_HOST` (for example `OLLAMA_HOST=127.0.0.1:11500`) or pass `--ollama-url`.
+4. Run `node dist/cli.js ../my-repo --llm`.
+
+For each module, codebase-map sends one prompt to `POST <url>/api/generate` with `stream: false`, using
+Node's built-in `fetch`. The prompt holds the module path, its static purpose, exports, imports and the
+first lines of up to six files, capped at 6,000 characters. The answer is written into the "What each
+module owns" section as ``- AI summary (AI-generated, Ollama `<model>`): ...``, under a note that says
+the summaries come from a local LLM and may be wrong. The static purpose table is unchanged.
+Nothing leaves your machine unless `--ollama-url` points elsewhere.
+
+**Without Ollama:** if Ollama is not reachable, a request times out, or the model is not pulled (HTTP 404),
+codebase-map prints one warning to stderr, skips all AI summaries, writes the full static map and exits 0.
+If a single module fails for another reason (for example HTTP 500), only that module is skipped and a
+warning lists it. Without `--llm`, no network request is made and the output is purely static.
 
 ### Regeneration in place
 
@@ -68,4 +119,5 @@ If the file exists without markers, the block is appended.
 
 - Exports and imports are found by regex, not a TypeScript parser; unusual syntax can be missed.
 - Only relative imports are graphed; path aliases (`@/foo`) and package imports are not resolved.
-- `--llm` is a stub.
+- AI summaries are model output: they can be wrong, and they change between runs.
+  Timeouts and missing models skip all AI summaries rather than waiting on each module.
