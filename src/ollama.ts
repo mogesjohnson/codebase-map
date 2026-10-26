@@ -121,7 +121,18 @@ export function cleanSummary(s: string): string {
     .replace(/codebase-map:(start|end)/gi, "")
     .replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/\s+/g, " ").trim();
-  return one.length > 400 ? one.slice(0, 397).trimEnd() + "..." : one;
+  return truncateWords(one, 400);
+}
+
+/** Cut at a word boundary at or before max characters (including the ellipsis) and add "…". */
+export function truncateWords(s: string, max: number): string {
+  if (s.length <= max) return s;
+  let cut = s.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  if (space > max * 0.6) cut = cut.slice(0, space);
+  // never leave half an escape such as "&l"
+  cut = cut.replace(/&[a-z]*$/i, "").replace(/[\s,;:.\-]+$/, "");
+  return cut + "…";
 }
 
 export interface SummaryResult {
@@ -132,21 +143,35 @@ export interface SummaryResult {
   failed: { module: string; reason: string }[];
   /** Modules over the --llm-max-modules cap. */
   capped: string[];
+  /** Set when the pass stopped early after repeated per-module failures; summaries so far are kept. */
+  stopped?: string;
 }
+
+/** Stop asking after this many per-module request failures in a row. */
+export const MAX_CONSECUTIVE_FAILURES = 3;
 
 /** Summarize modules in order, one request at a time. Never throws. */
 export async function summarizeModules(root: string, modules: Module[], opts: OllamaOptions): Promise<SummaryResult> {
   const result: SummaryResult = { summaries: new Map(), failed: [], capped: modules.slice(opts.maxModules).map((m) => m.name) };
-  for (const mod of modules.slice(0, opts.maxModules)) {
+  const todo = modules.slice(0, opts.maxModules);
+  let streak = 0;
+  for (const mod of todo) {
     try {
       const text = cleanSummary(await generate(buildPrompt(root, mod, opts.maxPromptChars), opts));
+      streak = 0;
       if (text) result.summaries.set(mod.name, text);
+      else result.failed.push({ module: mod.name, reason: "reply was empty after removing <think> blocks" });
     } catch (e) {
       const err = e instanceof OllamaError ? e : new OllamaError("bad-response", String(e));
       if (FATAL.includes(err.kind)) {
         return { summaries: new Map(), failed: [], capped: result.capped, warning: `${err.message}. Skipping AI summaries; writing the static map.` };
       }
       result.failed.push({ module: mod.name, reason: err.message });
+      if (++streak >= MAX_CONSECUTIVE_FAILURES) {
+        const left = todo.length - todo.indexOf(mod) - 1;
+        result.stopped = `stopped after ${streak} failed requests in a row (last: ${err.message}); ${left} more module(s) not asked`;
+        break;
+      }
     }
   }
   return result;
