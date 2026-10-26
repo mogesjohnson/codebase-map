@@ -60,13 +60,18 @@ test("cli --stdout prints the map without writing, and the no-git fallback is us
   assert.equal(existsSync(join(root, "docs", "CODEBASE_MAP.md")), false);
 });
 
-test("cli writes docs/CODEBASE_MAP.md and --llm falls back to static analysis", () => {
+test("cli writes docs/CODEBASE_MAP.md and updates it in place on rerun", () => {
   const root = tmpTree({ "src/a.ts": "export const a = 1;\n" });
-  const r = run(root, "--llm");
+  const r = run(root);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /not implemented yet/);
   assert.match(r.stdout, /created .*CODEBASE_MAP\.md/);
   const r2 = run(root);
   assert.match(r2.stdout, /updated/);
   assert.equal(count(readFileSync(join(root, "docs", "CODEBASE_MAP.md"), "utf8"), START), 1);
+});
+
+test("cli rejects a value flag without a value and a bad number", () => {
+  assert.equal(run("--llm-model").status, 2);
+  assert.match(run("--llm-model").stderr, /Missing value for --llm-model/);
+  assert.match(run("--llm-timeout", "abc").stderr, /--llm-timeout must be a positive integer/);
 });

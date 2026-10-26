@@ -8,7 +8,7 @@
 
 <!-- REPO-SPECIFIC: one or two sentences. What it does, who uses it, current version. -->
 codebase-map is a zero-runtime-dependency Node + TypeScript CLI that writes `docs/CODEBASE_MAP.md`,
-a living onboarding page built by static analysis only (no LLM). Version 0.1.0.
+a living onboarding page built by static analysis, with optional `--llm` AI summaries from a local Ollama. Version 0.1.0.
 <!-- /REPO-SPECIFIC -->
 
 ## Commands
@@ -25,7 +25,7 @@ Run these from the repo root. They are the only definition of "checks pass".
 ## Where things live
 
 <!-- REPO-SPECIFIC: five to ten lines. Path, then what it holds. No full tree. -->
-- `src/cli.ts`: argument parsing and the run.
+- `src/cli.ts`: argument parsing and the run. `src/ollama.ts`: the optional `--llm` Ollama client.
 - `src/scan.ts`, `src/analyze.ts`: file walk, module purposes, exports, imports.
 - `src/risk.ts`, `src/agents.ts`: churn/size/fan-in ranking and agent context file discovery.
 - `src/render.ts`, `src/markers.ts`: markdown + mermaid output and in-place regeneration.

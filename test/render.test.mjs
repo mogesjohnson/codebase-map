@@ -51,3 +51,16 @@ test("findAgentFiles matches agent files and rule dirs only", () => {
   assert.deepEqual(findAgentFiles(files), ["AGENTS.md", "pkg/CLAUDE.md", "GEMINI.md", ".cursorrules", ".cursor/rules/a.mdc",
     ".github/copilot-instructions.md", ".claude/settings.json"]);
 });
+
+test("render adds labeled AI summaries only when given, keeping static purposes", () => {
+  const files = scanFiles(BASIC);
+  const analysis = analyze(BASIC, files);
+  const base = { repoName: "basic", analysis, risks: [], hasGit: false, agentFiles: [], fileCount: files.length };
+  const plain = render(base);
+  assert.ok(!plain.includes("AI summary"));
+  assert.equal(render({ ...base, ai: { model: "m", summaries: new Map() } }), plain);
+  const out = render({ ...base, ai: { model: "m", summaries: new Map([["core", "Parses things."]]) } });
+  assert.ok(out.includes("### `core`\n\n- AI summary (AI-generated, Ollama `m`): Parses things.\n- Entry points"));
+  assert.match(out, /\| `core` \| Core holds the shared parsing helpers\. \|/);
+  assert.equal(out.split("- AI summary").length - 1, 1);
+});
