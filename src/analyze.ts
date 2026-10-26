@@ -17,6 +17,15 @@ export interface Analysis {
   fanIn: Map<string, Set<string>>;
 }
 
+const KNOWN_DIRS: Record<string, string> = {
+  ".github": "GitHub config: workflows, templates and ownership.",
+  ".githooks": "Git hooks run by the repo (core.hooksPath).",
+  ".claude": "Claude Code settings.",
+  ".codex": "Codex CLI settings.",
+  ".cursor": "Cursor editor rules and settings.",
+  ".vscode": "Editor settings.",
+};
+
 const README_RE = /^readme(\.md|\.txt)?$/i;
 
 /** Package dirs (nested package.json) become modules; otherwise the top-level folder. */
@@ -51,6 +60,8 @@ export function headerComment(text: string): string {
   if (m) return firstSentence(m[1].replace(/^\s*\*\s?/gm, " "));
   m = t.match(/^((?:\/\/.*\n)+)/);
   if (m) return firstSentence(m[1].replace(/^\s*\/\/\s?/gm, " "));
+  m = t.match(/^((?:#(?!!).*\n)+)/);
+  if (m) return firstSentence(m[1].replace(/^\s*#\s?/gm, " "));
   return "";
 }
 
@@ -147,6 +158,7 @@ export function analyze(root: string, files: FileInfo[]): Analysis {
       const c = headerComment(readText(root, f));
       if (c) { mod.purpose = c; break; }
     }
+    if (!mod.purpose) mod.purpose = KNOWN_DIRS[mod.name] ?? "";
     if (!mod.purpose) mod.purpose = mod.files.some((f) => f.endsWith(".md")) ? "Documentation." : "_(no purpose found)_";
 
     if (pkg) mod.entryPoints.push(...pkgEntries(pkg, mod.name === "." ? "" : mod.name));
@@ -160,10 +172,12 @@ export function analyze(root: string, files: FileInfo[]): Analysis {
         const target = resolveImport(root, f, spec, known);
         if (!target) continue;
         const tm = moduleOf(target, pkgDirs);
-        if (tm !== mod.name) {
-          mod.deps.add(tm);
+        if (tm !== mod.name) mod.deps.add(tm);
+        // fan-in counts importing modules at directory granularity (top-level folders are coarse)
+        const fromDir = dirname(f);
+        if (fromDir !== dirname(target)) {
           if (!fanIn.has(target)) fanIn.set(target, new Set());
-          fanIn.get(target)!.add(mod.name);
+          fanIn.get(target)!.add(fromDir);
         }
       }
     }
