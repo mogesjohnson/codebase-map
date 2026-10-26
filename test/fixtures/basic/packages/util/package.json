@@ -1,0 +1,5 @@
+{
+  "name": "util",
+  "description": "Tiny string padding utilities.",
+  "main": "index.js"
+}
