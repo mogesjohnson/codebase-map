@@ -41,3 +41,13 @@ test("gitChurn returns null outside a git repo (no-git fallback)", () => {
   const root = tmpTree({ "a.ts": "1\n" });
   assert.equal(gitChurn(root), null);
 });
+
+test("gitChurn on a subdirectory reports paths relative to that subdirectory", () => {
+  const root = tmpTree({ "pkg/a.ts": "1\n", "other.ts": "1\n" });
+  const git = (...a) => execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { stdio: "ignore" });
+  git("init", "-q");
+  git("add", "."); git("commit", "-q", "-m", "one");
+  writeFileSync(join(root, "pkg", "a.ts"), "2\n"); git("commit", "-qam", "two");
+  const churn = gitChurn(join(root, "pkg"));
+  assert.deepEqual([...churn], [["a.ts", 2]]);
+});

@@ -3,10 +3,10 @@ import { FileInfo } from "./scan.js";
 
 export interface Risk { path: string; churn: number; lines: number; fanIn: number; score: number }
 
-/** Commit count per path from git history; null when git or history is unavailable. */
+/** Commit count per root-relative path (root may be a subdir of the repo); null without git. */
 export function gitChurn(root: string): Map<string, number> | null {
   try {
-    const out = execFileSync("git", ["-C", root, "log", "--name-only", "--format="], {
+    const out = execFileSync("git", ["-C", root, "log", "--name-only", "--relative", "--format="], {
       encoding: "utf8", maxBuffer: 256 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"],
     });
     const m = new Map<string, number>();
