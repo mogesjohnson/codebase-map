@@ -112,9 +112,15 @@ export function buildPrompt(root: string, mod: Module, maxChars: number): string
   return out.slice(0, maxChars);
 }
 
-/** One line, no markdown table breakers, at most 400 characters. */
+/**
+ * One line, at most 400 characters, safe to write between the map markers: marker names are removed
+ * and every < and > is escaped, so a reply can never open an HTML comment or fake a marker.
+ */
 export function cleanSummary(s: string): string {
-  const one = s.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/\s+/g, " ").trim();
+  const one = s.replace(/<think>[\s\S]*?<\/think>/g, "")
+    .replace(/codebase-map:(start|end)/gi, "")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/\s+/g, " ").trim();
   return one.length > 400 ? one.slice(0, 397).trimEnd() + "..." : one;
 }
 
