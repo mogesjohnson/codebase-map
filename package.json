@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "tsc && node --test test/*.test.mjs"
   },
   "engines": { "node": ">=20" },
   "license": "MIT",
