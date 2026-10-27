@@ -19,7 +19,8 @@ export function gitChurn(root: string): Map<string, number> | null {
 export function rankRisk(files: FileInfo[], churn: Map<string, number> | null, fanIn: Map<string, Set<string>>, top = 15): Risk[] {
   const cand = files.filter((f) => f.lines > 0 && !/(^|\/)package-lock\.json$|\.lock$/.test(f.path));
   const rows = cand.map((f) => ({ path: f.path, churn: churn?.get(f.path) ?? 0, lines: f.lines, fanIn: fanIn.get(f.path)?.size ?? 0, score: 0 }));
-  const max = (k: "churn" | "lines" | "fanIn") => Math.max(1, ...rows.map((r) => r[k]));
+  // A loop, not Math.max(...spread): spreading 100k+ rows overflows the call stack.
+  const max = (k: "churn" | "lines" | "fanIn") => rows.reduce((m, r) => (r[k] > m ? r[k] : m), 1);
   const mc = max("churn"), ml = max("lines"), mf = max("fanIn");
   const wc = churn ? 0.45 : 0, wl = churn ? 0.35 : 0.65, wf = churn ? 0.2 : 0.35;
   for (const r of rows) {

@@ -26,6 +26,15 @@ test("rankRisk without git ignores churn and respects top", () => {
   assert.ok(ranked.every((r) => r.churn === 0));
 });
 
+test("rankRisk handles a huge repo without overflowing the stack", () => {
+  const n = 300_000;
+  const files = Array.from({ length: n }, (_, i) => f(`src/f${i}.ts`, (i % 50) + 1));
+  files.push(f("src/huge.ts", 5000));
+  const ranked = rankRisk(files, null, new Map(), 3);
+  assert.equal(ranked.length, 3);
+  assert.equal(ranked[0].path, "src/huge.ts");
+});
+
 test("gitChurn counts commits per file in a real tmp repo", () => {
   const root = tmpTree({ "a.ts": "1\n", "b.ts": "1\n" });
   const git = (...a) => execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { stdio: "ignore" });
